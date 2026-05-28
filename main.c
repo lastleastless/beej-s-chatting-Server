@@ -26,10 +26,10 @@ void add_to_pfds(struct pollfd* pfds[],int newfd,int* fd_count,int* fd_size)
 	if(*fd_size == *fd_count)
 	{
 		*fd_size *= 2;
-		struct pollfd* temp = realloc(&pfds,sizeof(struct pollfd) * *fd_size);
+		struct pollfd* temp = realloc(*pfds,sizeof(struct pollfd) * (*fd_size));
 		if(temp == NULL)
 		{
-			fprinf(stderr,"realloc fail\n");
+			fprintf(stderr,"realloc fail\n");
 			exit(1);
 		}
 		*pfds = temp;
@@ -100,16 +100,21 @@ int main(void)
 	char msg[MAXBUFLEN];
 	int fd_count = 0;
 	int fd_size = 5;
-	struct pollfds* pfds = malloc(sizeof *pfds * fd_size);
+	struct pollfd* pfds = malloc(sizeof *pfds * fd_size);
 	if((listener_fd = get_listener_socket())==-1)
 	{
 		fprintf(stderr,"fail to establish listener socket.\n");
 		exit(1);
 	}
+	else
+	{
+		printf("Successfully establish listener socket.\n");
+		printf("waiting for connection..\n");
+	}
 	pfds[0].fd = listener_fd;
 	pfds[0].events = POLLIN;
 	fd_count = 1;
-	while(true)
+	while(1)
 	{
 		int poll_count = poll(pfds,fd_count,-1);
 		if(poll_count == -1)
@@ -119,25 +124,25 @@ int main(void)
 		}
 		for(int i = 0; i < fd_count ; i++)
 		{
-			if(pfds[i].revent & POLLIN)
+			if(pfds[i].revents & POLLIN)
 			{
 				if(pfds[i].fd == listener_fd)
 				{
 					addrlen = sizeof remoteaddr;
-					newfd = accept(listener_fd,(struct sockaddr*)&remotaddr,&addrlen);
+					newfd = accept(listener_fd,(struct sockaddr*)&remoteaddr,&addrlen);
 					if(newfd == -1)
 						perror("accept");
 					else
 					{
 						add_to_pfds(&pfds,newfd,&fd_count,&fd_size);
-						inet_ntop(remoteaddr.ss_family,get_in_addr((struct sockaddr*)&remotaddr),s,sizeof s);
-						printf("get connection from %s , socket number: %d\n",s,newfd);
+						inet_ntop(remoteaddr.ss_family,get_in_addr((struct sockaddr*)&remoteaddr),remoteIP,sizeof remoteIP);
+						printf("get connection from %s , socket number: %d\n",remoteIP,newfd);
 						send(newfd, "Welcome To beej's chat server!\n",40,0);
 					}
 				}
 				else
 				{
-					int numbytes = recv(pfds[i].fd,msg,MAXBUFLEN);
+					int numbytes = recv(pfds[i].fd,msg,MAXBUFLEN,0);
 					if(numbytes <= 0)
 					{
 						if(numbytes == 0)
@@ -146,11 +151,11 @@ int main(void)
 						}
 						else
 						{
-							perror(recv);
+							perror("recv");
 						}
 
 							close(pfds[i].fd);
-							del_from_pfds(pfds,i,&fd_count);
+							delete_from_pfds(&pfds,i,&fd_count);
 					}
 					else
 					{
