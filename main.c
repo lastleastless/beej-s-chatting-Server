@@ -9,10 +9,13 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <time.h>
+#include <fcntl.h>
 
 #define PORT "3490"
 #define BACKLOG 10
 #define MAXBUFLEN 100
+
 
 void* get_in_addr(struct sockaddr* sa)
 {
@@ -20,6 +23,7 @@ void* get_in_addr(struct sockaddr* sa)
 		return &(((struct sockaddr_in*)sa)->sin_addr);
 	return &(((struct sockaddr_in6*)sa)->sin6_addr);
 }
+
 
 void add_to_pfds(struct pollfd* pfds[],int newfd,int* fd_count,int* fd_size)
 {
@@ -76,9 +80,10 @@ int get_listener_socket(void)
 			perror("server: bind");
 			continue;
 		}
+	break;
 	}
 	freeaddrinfo(servinfo);
-	if(p = NULL)
+	if(p == NULL)
 	{
 		fprintf(stderr,"server: fail to bind.\n");
 		return -1;
@@ -88,16 +93,19 @@ int get_listener_socket(void)
 		perror("server: listen");
 		return -1;
 	}
+ 	fcntl(sockfd,F_SETFL,O_NONBLOCK);
 	return sockfd;
 }
 int main(void)
 {
+        time_t endtime = time(NULL);
+	int dot = 1;
 	int listener_fd;
 	int newfd;
 	struct sockaddr_storage remoteaddr;
 	socklen_t addrlen;
 	char remoteIP[INET6_ADDRSTRLEN];
-	char msg[MAXBUFLEN];
+	char buf[MAXBUFLEN];
 	int fd_count = 0;
 	int fd_size = 5;
 	struct pollfd* pfds = malloc(sizeof *pfds * fd_size);
@@ -109,19 +117,37 @@ int main(void)
 	else
 	{
 		printf("Successfully establish listener socket.\n");
-		printf("waiting for connection..\n");
+		printf("Welcome to beej's chatting server!.\n");
+		printf("-------------------------------------\n");
 	}
 	pfds[0].fd = listener_fd;
 	pfds[0].events = POLLIN;
 	fd_count = 1;
 	while(1)
 	{
-		int poll_count = poll(pfds,fd_count,-1);
-		if(poll_count == -1)
-		{
+	       int poll_count = poll(pfds,fd_count,1000);
+	       if(poll_count == -1)
+	       {
 			perror("poll");
 			exit(1);
-		}
+	       }
+ 	       time_t currenttime = time(NULL);
+       	       if(currenttime - endtime >= 3)
+       	       {
+           	 if(fd_count == 1)
+           	 {
+               	 printf("\rwaiting for connection");
+               	 for(int i = 0; i < dot ; i++)
+               	 {
+                	    printf(".");
+               	 }
+               	 printf("   ");
+               	 fflush(stdout);
+               	 dot++;
+               	 if(dot == 4)
+                   dot = 1;
+           	 }
+       		}
 		for(int i = 0; i < fd_count ; i++)
 		{
 			if(pfds[i].revents & POLLIN)
@@ -134,36 +160,43 @@ int main(void)
 						perror("accept");
 					else
 					{
+ 			                        fcntl(newfd,F_SETFL,O_NONBLOCK);
 						add_to_pfds(&pfds,newfd,&fd_count,&fd_size);
-						inet_ntop(remoteaddr.ss_family,get_in_addr((struct sockaddr*)&remoteaddr),remoteIP,sizeof remoteIP);
-						printf("get connection from %s , socket number: %d\n",remoteIP,newfd);
-						send(newfd, "Welcome To beej's chat server!\n",40,0);
+						inet_ntop(remoteaddr.ss_family,get_in_addr((struct sockaddr*)&remoteaddr),remoteIP,addrlen);
+						printf("new connection : %s, socket number: %d\n",remoteIP,newfd);
 					}
 				}
+				
 				else
 				{
-					int numbytes = recv(pfds[i].fd,msg,MAXBUFLEN,0);
-					if(numbytes <= 0)
+					int data= recv(pfds[i].fd,buf,sizeof buf,0);
+					if(data == -1)
 					{
-						if(numbytes == 0)
+						if(errno == EAGAIN || errno == EWOULDBLOCK)
 						{
-							printf("connection closed from %d\n",pfds[i].fd);
+						
 						}
 						else
 						{
 							perror("recv");
-						}
-
 							close(pfds[i].fd);
 							delete_from_pfds(&pfds,i,&fd_count);
+						}
+					}
+					else if(data == 0)
+					{
+						printf("connection closed from socket %d.\n",pfds[i].fd);
+						close(pfds[i].fd);
+						delete_from_pfds(&pfds,i,&fd_count);
 					}
 					else
 					{
+						printf("Got message from socket%d: %s\n",pfds[i].fd,buf);
 						for(int j = 0; j < fd_count ; j++)
 						{
 							if((pfds[j].fd != listener_fd) &&(pfds[j].fd != pfds[i].fd))
 							{
-								if(send(pfds[j].fd,msg,numbytes,0)==-1)
+								if(send(pfds[j].fd,buf,sizeof buf,0)==-1)
 									perror("send");
 							}
 						}

@@ -7,9 +7,12 @@
 #include <netinet/in.h>
 #include <netdb.h>
 #include <string.h>
+#include <fcntl.h>
+#include <errno.h>
 
 #define MAXBUFLEN 100
 #define PORT "3490"
+#define MAXIDLEN 10
 
 void *get_in_addr(struct sockaddr* sa)
 {
@@ -20,14 +23,20 @@ void *get_in_addr(struct sockaddr* sa)
 
 int main(int argc,char **argv)
 {
+	char ID[MAXIDLEN];
 	char server_IP[INET6_ADDRSTRLEN];
-	char msg[MAXBUFLEN];
+	char buf[MAXBUFLEN];
 	int rv;
 	struct addrinfo hints,*servinfo,*p;
 	int sockfd;
 	if(argc != 3)
 	{
 		fprintf(stderr,"Usage: client Hostname ID\n");
+		exit(1);
+	}
+	if(strlen(argv[2]) > MAXIDLEN)
+	{
+		fprintf(stderr,"ID length must be less than 10\n");
 		exit(1);
 	}
 	memset(&hints,0,sizeof hints);
@@ -57,25 +66,35 @@ int main(int argc,char **argv)
 		fprintf(stderr,"client: fail to bind.\n");
 		exit(1);
 	}
+	fcntl(sockfd,F_SETFL,O_NONBLOCK);
 	freeaddrinfo(servinfo);
-	inet_ntop(p->ai_family,get_in_addr((struct sockaddr*)&p->ai_addr),server_IP,sizeof server_IP);
-	printf("Sucessfully Connect to server: %s\n",server_IP);
-	int recvnumbytes;
-	int sendnumbytes;
-	if((sendnumbytes = send(sockfd,argv[2],strlen(argv[2]),0))==-1)
-	{
-		perror("client: send");
-		exit(1);
-	}
-	if((recvnumbytes = recv(sockfd,msg,sizeof msg,0))==-1)
-	{
-		perror("client: recv");
-		exit(1);
-	}
-	msg[recvnumbytes] = '\0';
-	printf("%s\n",msg);
+	inet_ntop(p->ai_family,get_in_addr((struct sockaddr*)&p->ai_addr),server_IP,INET6_ADDRSTRLEN);
+	printf("Successfully connected to Server: %s\n",server_IP);
 	while(1)
 	{
+		int numbytes = recv(sockfd,buf,MAXBUFLEN-1,0);
+		if(numbytes <= 0)
+		{
+			if(numbytes == 0)
+			{
+				printf("Connection closed from %s\n",server_IP);
+			}
+			else
+			{
+				if(errno == EAGAIN || errno == EWOULDBLOCK)
+					{
+					}
+				else
+				{
+					perror("recv");
+					break;
+				}
+			}
+		}
+		char sendbuf[MAXBUFLEN];
+	        fgets(sendbuf,MAXBUFLEN,stdin);
+	        if(send(sockfd,sendbuf,MAXBUFLEN,0)==-1)
+			perror("send");
 	}
 	close(sockfd);
 	return 0;
