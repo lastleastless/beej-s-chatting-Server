@@ -14,6 +14,13 @@
 #define PORT "3490"
 #define MAXIDLEN 10
 
+struct userinfo
+{
+	char id[MAXIDLEN+1];
+	char buf[MAXBUFLEN+1];
+};
+
+
 void *get_in_addr(struct sockaddr* sa)
 {
 	if(sa->sa_family == AF_INET)
@@ -23,22 +30,24 @@ void *get_in_addr(struct sockaddr* sa)
 
 int main(int argc,char **argv)
 {
-	char ID[MAXIDLEN];
-	char server_IP[INET6_ADDRSTRLEN];
-	char buf[MAXBUFLEN];
+	char s[INET6_ADDRSTRLEN];
+	struct userinfo r;
+	struct userinfo u;
 	int rv;
 	struct addrinfo hints,*servinfo,*p;
 	int sockfd;
+
 	if(argc != 3)
 	{
 		fprintf(stderr,"Usage: client Hostname ID\n");
 		exit(1);
 	}
-	if(strlen(argv[2]) > MAXIDLEN)
+	if(strlen(argv[2]) >= MAXIDLEN)
 	{
 		fprintf(stderr,"ID length must be less than 10\n");
 		exit(1);
 	}
+	printf("current ID: %s\n",argv[2]);
 	memset(&hints,0,sizeof hints);
 	hints.ai_family = AF_UNSPEC;
 	hints.ai_socktype = SOCK_STREAM;
@@ -56,6 +65,7 @@ int main(int argc,char **argv)
 		}
 		if(connect(sockfd,p->ai_addr,p->ai_addrlen)==-1)
 		{
+			close(sockfd);
 			perror("client: connect");
 			continue;
 		}
@@ -66,18 +76,18 @@ int main(int argc,char **argv)
 		fprintf(stderr,"client: fail to bind.\n");
 		exit(1);
 	}
-	fcntl(sockfd,F_SETFL,O_NONBLOCK);
+	strncpy(u.id,argv[2],MAXIDLEN);
 	freeaddrinfo(servinfo);
-	inet_ntop(p->ai_family,get_in_addr((struct sockaddr*)&p->ai_addr),server_IP,INET6_ADDRSTRLEN);
-	printf("Successfully connected to Server: %s\n",server_IP);
+	fcntl(sockfd,F_SETFL,O_NONBLOCK);
 	while(1)
 	{
-		int numbytes = recv(sockfd,buf,MAXBUFLEN-1,0);
+		int numbytes = recv(sockfd,&r,MAXBUFLEN + MAXIDLEN + 2,0);
 		if(numbytes <= 0)
 		{
 			if(numbytes == 0)
 			{
-				printf("Connection closed from %s\n",server_IP);
+				printf("Connection closed from %s\n",s);
+				break;
 			}
 			else
 			{
@@ -92,8 +102,10 @@ int main(int argc,char **argv)
 			}
 		}
 		char sendbuf[MAXBUFLEN];
-	        fgets(sendbuf,MAXBUFLEN,stdin);
-	        if(send(sockfd,sendbuf,MAXBUFLEN,0)==-1)
+	        fgets(sendbuf,MAXBUFLEN-MAXIDLEN-1,stdin);
+		strncpy(u.buf,sendbuf,MAXBUFLEN);
+		int sendbyte = 0;
+		if((sendbyte = send(sockfd,(struct userinfo*)&u,sizeof u,0))==-1)
 			perror("send");
 	}
 	close(sockfd);

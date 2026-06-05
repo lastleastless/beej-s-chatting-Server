@@ -15,7 +15,14 @@
 #define PORT "3490"
 #define BACKLOG 10
 #define MAXBUFLEN 100
+#define MAXIDLEN 10
 
+
+struct userinfo
+{
+	char id[MAXIDLEN+1];
+	char buf[MAXBUFLEN+1];
+};
 
 void* get_in_addr(struct sockaddr* sa)
 {
@@ -58,6 +65,7 @@ int get_listener_socket(void)
 	hints.ai_family = AF_UNSPEC;
 	hints.ai_flags = AI_PASSIVE;
 	hints.ai_socktype = SOCK_STREAM;
+	char data[MAXBUFLEN + MAXIDLEN + 1];
 	if((rv = getaddrinfo(NULL,PORT,&hints,&servinfo))==-1)
 	{
 		fprintf(stderr,"pollserver: getaddrinfo %s\n",gai_strerror(rv));
@@ -108,7 +116,10 @@ int main(void)
 	char buf[MAXBUFLEN];
 	int fd_count = 0;
 	int fd_size = 5;
+	int user_count = 0;
+	int user_size = 0;
 	struct pollfd* pfds = malloc(sizeof *pfds * fd_size);
+	struct userinfo u;
 	if((listener_fd = get_listener_socket())==-1)
 	{
 		fprintf(stderr,"fail to establish listener socket.\n");
@@ -167,41 +178,26 @@ int main(void)
 					}
 				}
 				
-				else
+				else//broadcast msg from user.
 				{
-					int data= recv(pfds[i].fd,buf,sizeof buf,0);
-					if(data == -1)
+					int sender_fd = pfds[i].fd;
+					int numbytes;
+					if((numbytes = recv(pfds[i].fd,(struct userinfo*)&u,sizeof u,0))<=0)
 					{
-						if(errno == EAGAIN || errno == EWOULDBLOCK)
+						if(numbytes == 0)
 						{
-						
+							printf("Connection closed from %s\n",remoteIP);
 						}
 						else
-						{
 							perror("recv");
-							close(pfds[i].fd);
-							delete_from_pfds(&pfds,i,&fd_count);
-						}
-					}
-					else if(data == 0)
-					{
-						printf("connection closed from socket %d.\n",pfds[i].fd);
 						close(pfds[i].fd);
-						delete_from_pfds(&pfds,i,&fd_count);
+						delete_from_pfds(&pfds,pfds[i].fd,&fd_count);
 					}
 					else
 					{
-						printf("Got message from socket%d: %s\n",pfds[i].fd,buf);
-						for(int j = 0; j < fd_count ; j++)
-						{
-							if((pfds[j].fd != listener_fd) &&(pfds[j].fd != pfds[i].fd))
-							{
-								if(send(pfds[j].fd,buf,sizeof buf,0)==-1)
-									perror("send");
-							}
-						}
+						printf("userID: %s. userMSG:%s\n",u.id,u.buf);
 					}
-
+					
 				}
 			}
 		}
