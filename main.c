@@ -14,14 +14,14 @@
 
 #define PORT "3490"
 #define BACKLOG 10
-#define MAXBUFLEN 100
+#define MAXDATALEN 100
 #define MAXIDLEN 10
 
 
 struct userinfo
 {
 	char id[MAXIDLEN+1];
-	char buf[MAXBUFLEN+1];
+	char buf[MAXDATALEN+1];
 };
 
 void* get_in_addr(struct sockaddr* sa)
@@ -31,6 +31,47 @@ void* get_in_addr(struct sockaddr* sa)
 	return &(((struct sockaddr_in6*)sa)->sin6_addr);
 }
 
+int sendall(int s,char* buf,int *len)
+{
+	int total = 0;
+	int bytesleft = *len;
+	int n;
+	while(total < *len)
+	{
+		n =send(s,buf + total ,bytesleft,0);
+		if(n == -1)
+		{
+			if(errno == EAGAIN || errno == EWOULDBLOCK)
+				continue;
+			else
+				break;
+		}
+		total += n;
+		bytesleft -= n;
+	}
+	return n == -1 ? -1 : 0;
+}
+
+int recvall(int s,char* buf,int *len)
+{
+	int total = 0;
+	int bytesleft = *len;
+	int n;
+	while(total < *len)
+	{
+		n = recv(s,buf + total,bytesleft,0);
+		if(n ==-1)
+		{
+			if(errno == EAGAIN || errno == EWOULDBLOCK)
+				continue;
+			else
+				break;
+		}
+		total += n;
+		bytesleft -= n;
+	}
+	return n == -1 ? -1 : 0;
+}
 
 void add_to_pfds(struct pollfd* pfds[],int newfd,int* fd_count,int* fd_size)
 {
@@ -65,7 +106,6 @@ int get_listener_socket(void)
 	hints.ai_family = AF_UNSPEC;
 	hints.ai_flags = AI_PASSIVE;
 	hints.ai_socktype = SOCK_STREAM;
-	char data[MAXBUFLEN + MAXIDLEN + 1];
 	if((rv = getaddrinfo(NULL,PORT,&hints,&servinfo))==-1)
 	{
 		fprintf(stderr,"pollserver: getaddrinfo %s\n",gai_strerror(rv));
@@ -113,7 +153,7 @@ int main(void)
 	struct sockaddr_storage remoteaddr;
 	socklen_t addrlen;
 	char remoteIP[INET6_ADDRSTRLEN];
-	char buf[MAXBUFLEN];
+	char packet[2+2+MAXDATALEN+2+MAXIDLEN];
 	int fd_count = 0;
 	int fd_size = 5;
 	int user_count = 0;
@@ -180,24 +220,33 @@ int main(void)
 				
 				else//broadcast msg from user.
 				{
-					int sender_fd = pfds[i].fd;
-					int numbytes;
-					if((numbytes = recv(pfds[i].fd,(struct userinfo*)&u,sizeof u,0))<=0)
+					int numbytes = recv(pfds[i].fd,packet,sizeof packet,0);
+					if(numbytes == -1)
+						perror("recv");
+					if(numbytes == 0)
 					{
-						if(numbytes == 0)
-						{
-							printf("Connection closed from %s\n",remoteIP);
-						}
-						else
-							perror("recv");
+						printf("Closed connection from %d\n",pfds[i].fd);
 						close(pfds[i].fd);
 						delete_from_pfds(&pfds,pfds[i].fd,&fd_count);
+						continue;
 					}
-					else
-					{
-						printf("userID: %s. userMSG:%s\n",u.id,u.buf);
-					}
-					
+					uint16_t totalsize;
+					int offset = 0;
+					memcpy(&totalsize,packet+offset,2);
+					totalsize = ntohs(totalsize);
+					offset+=2;
+					printf("total packet size: %d, ",totalsize);
+					uint16_t idlen;
+					memcpy(&idlen,packet + offset, 2);
+					offset+=2;
+					idlen = ntohs(idlen);
+					printf("id length: %d, ",idlen);
+					char id[MAXIDLEN + 3];
+					memset(id,0,sizeof id);
+					memcpy(id,packet + offset,idlen);
+					int idsize = ntohs(idlen);
+					id[idsize] = '\0';
+					printf("id: %s\n",id);
 				}
 			}
 		}
