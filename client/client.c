@@ -9,7 +9,7 @@
 #include <string.h>
 #include <errno.h>
 
-#define MAXDATALEN 100
+#define MAXDATALEN 30
 #define PORT "3490"
 #define MAXIDLEN 10
 
@@ -99,6 +99,13 @@ int main(int argc,char **argv)
 			break;
 		data[strcspn(data,"\n")] = '\0';
 		int datalen = strlen(data);
+		printf("datasize: %d\n",datalen);
+		if(datalen >= MAXDATALEN)
+			{
+				fprintf(stderr,"Too long input.\n");
+				close(sockfd);
+				exit(1);
+			}
 		uint16_t netdatalen = htons(datalen);
 		int offset = 2;
 		memcpy(packet+offset,&netidlen,2);
@@ -118,6 +125,7 @@ int main(int argc,char **argv)
 		else
 		{
 			printf("Successfully send packet to %s\n",s);
+			printf("byteleft: %d\n",offset);
 		}
 		memset(&data,0,sizeof data);
 		memset(&packet,0,sizeof packet);

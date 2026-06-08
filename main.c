@@ -52,25 +52,28 @@ int sendall(int s,char* buf,int *len)
 	return n == -1 ? -1 : 0;
 }
 
-int recvall(int s,char* buf,int *len)
+int recvall(int s,char* buf,int len)
 {
 	int total = 0;
-	int bytesleft = *len;
+	int bytesleft = len;
 	int n;
-	while(total < *len)
+	while(total < len)
 	{
 		n = recv(s,buf + total,bytesleft,0);
 		if(n ==-1)
 		{
 			if(errno == EAGAIN || errno == EWOULDBLOCK)
+			{	
+				usleep(1000);
 				continue;
+			}
 			else
 				break;
 		}
 		total += n;
 		bytesleft -= n;
 	}
-	return n == -1 ? -1 : 0;
+	return n == -1 ? -1 : total;
 }
 
 void add_to_pfds(struct pollfd* pfds[],int newfd,int* fd_count,int* fd_size)
@@ -220,33 +223,93 @@ int main(void)
 				
 				else//broadcast msg from user.
 				{
-					int numbytes = recv(pfds[i].fd,packet,sizeof packet,0);
-					if(numbytes == -1)
-						perror("recv");
-					if(numbytes == 0)
+					uint16_t net_total = 0;
+					int header_res = recvall(pfds[i].fd,(char*)&net_total,2);
+					if(header_res == 0)
 					{
-						printf("Closed connection from %d\n",pfds[i].fd);
+						printf("close socket%d\n",pfds[i].fd);
 						close(pfds[i].fd);
-						delete_from_pfds(&pfds,pfds[i].fd,&fd_count);
+						delete_from_pfds(&pfds,i,&fd_count);
+						i--;
+						memset(packet,0,sizeof packet);
 						continue;
 					}
-					uint16_t totalsize;
+					if(header_res == -1)
+					{
+						perror("recv");
+						close(pfds[i].fd);
+						delete_from_pfds(&pfds,i,&fd_count);
+						i--;
+						continue;
+					}
+					int totalsize = ntohs(net_total);
+					if(totalsize < 4)
+					{
+						fprintf(stderr,"Security alert: invaild packet size on socket %d.\n",i);
+						close(pfds[i].fd);
+						delete_from_pfds(&pfds,i,&fd_count);
+						i--;
+						continue;
+					}
 					int offset = 0;
-					memcpy(&totalsize,packet+offset,2);
-					totalsize = ntohs(totalsize);
+					memcpy(&net_total,packet,2);
+					offset += 2;
+					if(totalsize > sizeof(packet))
+					{
+						fprintf(stderr,"Security alert: invaild total size on socket %d.\n",i);
+						close(pfds[i].fd);
+						delete_from_pfds(&pfds,i,&fd_count);
+						i--;
+						continue;
+					}
+					int bodysize = totalsize - 2;
+					int body_res = recvall(pfds[i].fd,packet + 2, bodysize);
+					if(body_res <= 0)
+					{
+						fprintf(stderr,"Connection loss while recv body from socket %d\n",i);
+						close(pfds[i].fd);
+						delete_from_pfds(&pfds,i,&fd_count);
+						i--;
+						continue;
+					}
 					offset+=2;
-					printf("total packet size: %d, ",totalsize);
-					uint16_t idlen;
-					memcpy(&idlen,packet + offset, 2);
-					offset+=2;
-					idlen = ntohs(idlen);
-					printf("id length: %d, ",idlen);
-					char id[MAXIDLEN + 3];
+					uint16_t netidlen;
+					memcpy(&netidlen,packet+offset,2);
+					int idlen = ntohs(netidlen);
+					if(idlen > MAXIDLEN || offset + idlen > totalsize)
+					{
+						fprintf(stderr,"Security alert: invaild id size on socket %d.\n",i);
+						close(pfds[i].fd);
+						delete_from_pfds(&pfds,i,&fd_count);
+						i--;
+						continue;
+					}
+					printf("idlen: %d, ",idlen);
+					char id[MAXIDLEN + 1];
 					memset(id,0,sizeof id);
-					memcpy(id,packet + offset,idlen);
-					int idsize = ntohs(idlen);
-					id[idsize] = '\0';
-					printf("id: %s\n",id);
+					memcpy(id,packet+offset,idlen);
+					offset += idlen;
+					id[idlen] = '\0';
+					printf("%s : ",id);
+					
+					char data[MAXDATALEN + 1];
+					uint16_t netdatalen;
+					memset(data,0,sizeof data);
+					memcpy(&netdatalen,packet+offset,2);
+					offset+=2;
+					int datalen = ntohs(netdatalen);
+					if(datalen > MAXDATALEN || offset + datalen > totalsize)
+					{
+						fprintf(stderr,"Security alert: invaild id size on socket %d.\n",i);
+						close(pfds[i].fd);
+						delete_from_pfds(&pfds,i,&fd_count);
+						i--;
+						continue;
+					}
+					memcpy(data,packet+offset,datalen);
+					id[datalen] = '\0';
+					printf(" %s\n",data);
+					memset(packet,0,sizeof packet);
 				}
 			}
 		}
