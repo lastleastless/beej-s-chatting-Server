@@ -8,8 +8,9 @@
 #include <netdb.h>
 #include <string.h>
 #include <errno.h>
+#include <fcntl.h>
 
-#define MAXDATALEN 30
+#define MAXDATALEN 50
 #define PORT "3490"
 #define MAXIDLEN 10
 
@@ -34,6 +35,36 @@ int sendall(int s,char* data,int* len)
 	return n==-1 ? -1 : 0;
 }
 
+int recvall(int s,char* data,int len)
+{
+	int total = 0;
+	int bytesleft = len;
+	int n;
+	while(total < len)
+	{
+		n = recv(s,data+total,bytesleft,0);
+		if(n <= -1)
+		{
+			if(n==0)
+				return 0;
+			else
+			{
+				if(errno == EAGAIN || errno == EWOULDBLOCK)
+				{
+					usleep(1000);
+					continue;
+				}
+				else
+					n=-1;
+			}
+			break;
+		}
+		total += n;
+		bytesleft -= n;
+	}
+	return n == -1 ? -1 : total;
+}
+
 
 void *get_in_addr(struct sockaddr* sa)
 {
@@ -44,8 +75,9 @@ void *get_in_addr(struct sockaddr* sa)
 
 int main(int argc,char **argv)
 {
+	char recvpacket[2+MAXIDLEN+2+MAXDATALEN+2];
 	char s[INET6_ADDRSTRLEN];
-	char packet[2+MAXIDLEN+3+MAXDATALEN+3];
+	char packet[2+MAXIDLEN+2+MAXDATALEN+2];
 	//packet -> totalsize , IDsize , ID , BUFsize , BUF
 	int rv;
 	struct addrinfo hints,*servinfo,*p;
@@ -87,6 +119,7 @@ int main(int argc,char **argv)
 		fprintf(stderr,"client: fail to bind.\n");
 		exit(1);
 	}
+	fcntl(sockfd,F_SETFL,O_NONBLOCK);
 	inet_ntop(p->ai_family,get_in_addr((struct sockaddr*)p->ai_addr),s,sizeof s);
 	freeaddrinfo(servinfo);
 	printf("Sucessfully Connect to server: %s ,current ID: %s\n",s,argv[2]);
@@ -94,18 +127,84 @@ int main(int argc,char **argv)
 	uint16_t netidlen = htons(idlen);
 	while(1)
 	{
+		uint16_t net_total;
+		int header_res = recvall(sockfd,(char*)&net_total,2);
+		if(header_res == -1)
+		{
+			fprintf(stderr,"recv fail.\n");
+			close(sockfd);
+			exit(1);
+		}
+		else if(header_res == 0)
+		{
+			printf("Connection closed from server.\n");
+			close(sockfd);
+			exit(EXIT_SUCCESS);
+		}
+		else
+		{
+			int totalsize = ntohs(net_total);
+			if(totalsize < 4)
+			{
+				fprintf(stderr,"Security alert: invaild packet size on server.\n");
+				close(sockfd);
+				exit(EXIT_FAILURE);
+			}
+			int offset = 2;
+			int bodysize = totalsize - 2;
+			if(totalsize > sizeof(recvpacket))
+			{
+				fprintf(stderr,"Security alert: invaild total packet size on server.\n");
+				close(sockfd);
+				exit(EXIT_FAILURE);
+			}
+			int body_res = recvall(sockfd,recvpacket+offset,bodysize);
+			if(body_res <= -1)
+			{
+				fprintf(stderr,"Connection loss..\n");
+				close(sockfd);
+				exit(EXIT_FAILURE);
+			}
+			uint16_t netidlen;
+			memcpy(&netidlen,recvpacket+offset,2);
+			offset += 2;
+			int idlen = ntohs(netidlen);
+			if(idlen > MAXIDLEN)
+			{
+				fprintf(stderr,"Security alert: invaild id size on server.\n");
+				close(sockfd);
+				exit(EXIT_FAILURE);
+			}
+			char id[MAXIDLEN+1];
+			memset(id,0,sizeof id);
+			memcpy(id,recvpacket+offset,idlen);
+			offset += idlen;
+			id[idlen] = '\0';
+			printf("%s:",id);
+
+			uint16_t netdatalen;
+			memcpy(&netdatalen,recvpacket+offset,2);
+			offset += 2;
+			int datalen = ntohs(netdatalen);
+			if(datalen > MAXDATALEN)	
+			{
+				fprintf(stderr,"Security alert: invaild data size on server.\n");
+				close(sockfd);
+				exit(EXIT_FAILURE);
+			}
+			char data[MAXDATALEN+1];
+			memset(data,0,sizeof data);
+			memcpy(data,recvpacket+offset,datalen);
+			data[datalen] = '\0';
+			printf("%s\n",data);
+			memset(recvpacket,0,sizeof recvpacket);
+		}		
 		char data[MAXDATALEN+1];
 		if(fgets(data,MAXDATALEN,stdin)==NULL)
 			break;
 		data[strcspn(data,"\n")] = '\0';
 		int datalen = strlen(data);
 		printf("datasize: %d\n",datalen);
-		if(datalen >= MAXDATALEN)
-			{
-				fprintf(stderr,"Too long input.\n");
-				close(sockfd);
-				exit(1);
-			}
 		uint16_t netdatalen = htons(datalen);
 		int offset = 2;
 		memcpy(packet+offset,&netidlen,2);

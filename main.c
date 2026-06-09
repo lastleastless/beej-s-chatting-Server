@@ -14,7 +14,7 @@
 
 #define PORT "3490"
 #define BACKLOG 10
-#define MAXDATALEN 100
+#define MAXDATALEN 50
 #define MAXIDLEN 10
 
 
@@ -69,6 +69,10 @@ int recvall(int s,char* buf,int len)
 			}
 			else
 				break;
+		}
+		if(n == 0)
+		{
+			return 0;
 		}
 		total += n;
 		bytesleft -= n;
@@ -251,9 +255,7 @@ int main(void)
 						i--;
 						continue;
 					}
-					int offset = 0;
-					memcpy(&net_total,packet,2);
-					offset += 2;
+					int offset = 2;
 					if(totalsize > sizeof(packet))
 					{
 						fprintf(stderr,"Security alert: invaild total size on socket %d.\n",i);
@@ -263,7 +265,7 @@ int main(void)
 						continue;
 					}
 					int bodysize = totalsize - 2;
-					int body_res = recvall(pfds[i].fd,packet + 2, bodysize);
+					int body_res = recvall(pfds[i].fd,packet + offset, bodysize);
 					if(body_res <= 0)
 					{
 						fprintf(stderr,"Connection loss while recv body from socket %d\n",i);
@@ -272,11 +274,10 @@ int main(void)
 						i--;
 						continue;
 					}
-					offset+=2;
 					uint16_t netidlen;
 					memcpy(&netidlen,packet+offset,2);
 					int idlen = ntohs(netidlen);
-					if(idlen > MAXIDLEN || offset + idlen > totalsize)
+					if(idlen > MAXIDLEN)
 					{
 						fprintf(stderr,"Security alert: invaild id size on socket %d.\n",i);
 						close(pfds[i].fd);
@@ -285,6 +286,8 @@ int main(void)
 						continue;
 					}
 					printf("idlen: %d, ",idlen);
+					offset += 2;
+
 					char id[MAXIDLEN + 1];
 					memset(id,0,sizeof id);
 					memcpy(id,packet+offset,idlen);
@@ -298,7 +301,7 @@ int main(void)
 					memcpy(&netdatalen,packet+offset,2);
 					offset+=2;
 					int datalen = ntohs(netdatalen);
-					if(datalen > MAXDATALEN || offset + datalen > totalsize)
+					if(datalen > MAXDATALEN )
 					{
 						fprintf(stderr,"Security alert: invaild id size on socket %d.\n",i);
 						close(pfds[i].fd);
@@ -309,6 +312,16 @@ int main(void)
 					memcpy(data,packet+offset,datalen);
 					id[datalen] = '\0';
 					printf(" %s\n",data);
+					offset += idlen;
+					for(int j = 1; j < fd_count ; j++)
+					{
+						if(pfds[j].fd != listener_fd && pfds[j].fd != pfds[i].fd)
+						{
+							int numbytes = sendall(pfds[j].fd,packet,&offset);
+							if(numbytes <= -1)
+								perror("send");
+						}
+					}
 					memset(packet,0,sizeof packet);
 				}
 			}
