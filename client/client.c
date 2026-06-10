@@ -11,7 +11,7 @@
 #include <fcntl.h>
 
 #define MAXDATALEN 50
-#define PORT "3490"
+#define PORT "4440"
 #define MAXIDLEN 10
 
 int sendall(int s,char* data,int* len)

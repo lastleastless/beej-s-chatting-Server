@@ -9,13 +9,39 @@
 #include <arpa/inet.h>
 #include <sys/epoll.h>
 #include <fcntl.h>
+#include <string.h>
 
 #define MAXEVENTS 20
 #define MAXIDLEN 10
 #define MAXDATALEN 10
-
+#define MAXCLIENTNUM 20000
 #define PORT "4440"
 #define BACKLOG 10
+
+int add_to_fdlist(int fd,int fdlist[],int *fd_count,int *fd_size)
+{
+	if(*fd_count == *fd_size)
+	{
+		*fd_size *= 2;
+		if((*fd_size) > MAXCLIENTNUM)
+			return 1;
+		int *temp = realloc(fdlist,sizeof (int) * (*fd_size));
+		if(temp == NULL)
+			return -1;
+		fdlist = temp;
+		fprintf(stdout,"Successfully expand userlist to %d\n",*fd_size);
+	}
+	fdlist[*fd_count] = fd;
+	(*fd_count)++;
+	return 0;
+}
+
+void delete_from_fdlist(int fdlist[],int idx,int *fd_count)
+{
+	fdlist[idx] = fdlist[(*fd_count)-1];
+	(*fd_count)--;
+}
+
 
 int sendall(int s,char* packet,int len)
 {
@@ -60,7 +86,10 @@ int recvall(int s,char* buffer,int len)
 			else
 			{
 				if(errno == EAGAIN || errno == EWOULDBLOCK)
+				{
+					usleep(1000);
 					continue;
+				}
 				else
 				{
 					n = -1;
@@ -84,6 +113,10 @@ void *get_in_addr(struct sockaddr* sa)
 
 int main()
 {
+	int fd_size = 5;
+	int fd_count = 0;
+	int fdlist[fd_size];
+
 	int listener_fd;
 	int rv;
 	struct addrinfo hints,*servinfo,*p;
@@ -97,7 +130,7 @@ int main()
 	hints.ai_family = AF_UNSPEC;
 	if((rv = getaddrinfo(NULL,PORT,&hints,&servinfo))==-1)
 	{
-		fprintf(stderr,"getaddrinfo: %s\n",gai_sterror(rv));
+		fprintf(stderr,"getaddrinfo: %s\n",gai_strerror(rv));
 		exit(1);
 	}
 	for(p =servinfo; p != NULL ;p = p->ai_next)
@@ -131,6 +164,12 @@ int main()
 	}
 	fcntl(listener_fd,F_SETFL,O_NONBLOCK);
 	printf("Successfully establish listener socket.\n");
+	if(add_to_fdlist(listener_fd,fdlist,&fd_count,&fd_size)!=0)
+	{
+		fprintf(stderr,"fail to get fdlist.\n");
+		exit(1);
+	}
+
 	int epfd = epoll_create1(0);
 	if(epfd == -1)
 	{
@@ -156,32 +195,40 @@ int main()
 		}
 		for(int i = 0 ; i < nfds; i++)
 		{
-			if(events[i].fd == listener_fd)
+			if(events[i].data.fd == listener_fd)
 			{
 				char clientip[INET6_ADDRSTRLEN];
 				struct sockaddr_storage clientaddr;
 				socklen_t clientaddrlen = sizeof clientaddr;
-				int newfd = accept(listener_fd,(struct sockaddr*)&clientaddr,&clientaddrlen);
-				if(newfd == -1)
+				while(1)
 				{
-					if(errno == EAGAIN || EWOULDBLOCK)
-					{}
-					else
+					int newfd = accept(listener_fd,(struct sockaddr*)&clientaddr,&clientaddrlen);
+					if(newfd == -1)
 					{
-						perror("accept");
-						break;
+						if(errno == EAGAIN || EWOULDBLOCK)
+						{
+							continue;
+						}
+						else
+						{
+							perror("accept");
+							break;
+						}
 					}
-				}
-				fcntl(newfd,F_SETFL,O_NONBLOCK);
-				struct poll_event client_ev;
-				client_ev.events = EPOLLIN | EPOLLET;
-				client_ev.data.fd = newfd;
-				inet_ntop(clientaddr.ss_family,get_in_addr((struct sockaddr*)&clientaddr),&clientip,sizeof clientip);
-				printf("Successfully connect to %s, socket number: %d\n",clientip,newfd);
-				if(epoll_ctl(epfd,EPOLL_CTL_ADD,newfd,&ev)==-1)
-				{
-					perror("client epoll_clt");
-					close(newfd);
+					fcntl(newfd,F_SETFL,O_NONBLOCK);
+					add_to_fdlist(newfd,fdlist,&fd_count,&fd_size);
+					struct epoll_event client_ev;
+					client_ev.events = EPOLLIN | EPOLLET;
+					client_ev.data.fd = newfd;
+					inet_ntop(clientaddr.ss_family,get_in_addr((struct sockaddr*)&clientaddr),clientip,sizeof clientip);
+					printf("Successfully connect to %s, socket number: %d\n",clientip,newfd);
+					if(epoll_ctl(epfd,EPOLL_CTL_ADD,newfd,&ev)==-1)
+					{
+						perror("client epoll_clt");
+						close(newfd);
+					}
+					if(errno == EAGAIN)
+						break;
 				}
 			}
 			else
@@ -213,7 +260,7 @@ int main()
 					int body_res = recvall(sender_fd,packet+offset,bodysize);
 					if(body_res <= 0)
 					{
-						fprintf(stderr,'Connection loss from %d\n",sender_fd);
+						fprintf(stderr,"Connection loss from %d\n",sender_fd);
 						close(sender_fd);
 					}
 					uint16_t netidlen;
@@ -235,7 +282,7 @@ int main()
 					int datalen = ntohs(netdatalen);
 					if(datalen > MAXDATALEN || datalen + offset > totalsize)
 					{
-						fprintf(stderr,'Security alert: invaild data size: %d on fd %d\n:,datalen,sender_fd);
+						fprintf(stderr,"Security alert: invaild data size: %d on fd %d\n:",datalen,sender_fd);
 						close(sender_fd);
 					}
 					char data[MAXDATALEN+1];
@@ -243,20 +290,22 @@ int main()
 					offset += datalen;
 					printf("%s : %s\n",id,data);
 					memcpy(packet,&totalsize,2);
-					for(int j = 1; j < nfds ; j++)
+					for(int j = 1; j < fd_count ; j++)
 					{
-						if(events[j].fd != sender_fd)
+						if(fdlist[j]!= sender_fd)
 						{
-							int sendbytes = sendall(events[j].fd,packet,totalsize);
+							int sendbytes = sendall(fdlist[j],packet,totalsize);
 							if(sendbytes == 0)
 							{
-								printf("Connection closed from %d while broadcasting.\n",events[j].fd);
-								close(events[j].fd);
+								printf("Connection closed from %d while broadcasting.\n",fdlist[j]);
+								close(fdlist[j]);
+								delete_from_fdlist(fdlist,j,&fd_count);
 							}
 							else if(sendbytes == -1)
 							{
 								perror("send:broadcasting:");
-								close(events[j].fd);
+								close(fdlist[j]);
+								delete_from_fdlist(fdlist,j,&fd_count);
 							}
 						}
 					}
