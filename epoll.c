@@ -13,9 +13,9 @@
 
 #define MAXEVENTS 20
 #define MAXIDLEN 10
-#define MAXDATALEN 10
+#define MAXDATALEN 50
 #define MAXCLIENTNUM 20000
-#define PORT "4440"
+#define PORT "3490"
 #define BACKLOG 10
 
 int add_to_fdlist(int fd,int **fdlist,int *fd_count,int *fd_size)
@@ -197,32 +197,34 @@ int main()
 		{
 			if(events[i].data.fd == listener_fd)
 			{
-				char clientip[INET6_ADDRSTRLEN];
-				struct sockaddr_storage clientaddr;
-				socklen_t clientaddrlen = sizeof clientaddr;
-				int newfd = accept(listener_fd,(struct sockaddr*)&clientaddr,&clientaddrlen);
-				if(newfd == -1)
+				while(1)
 				{
-					if(errno == EAGAIN || EWOULDBLOCK)
-					{}
-					else
+					char clientip[INET6_ADDRSTRLEN];
+					struct sockaddr_storage clientaddr;
+					socklen_t clientaddrlen = sizeof clientaddr;
+					int newfd = accept(listener_fd,(struct sockaddr*)&clientaddr,&clientaddrlen);
+					if(newfd == -1)
 					{
-						perror("accept");
-						break;
+						if(errno == EAGAIN ||errno == EWOULDBLOCK)
+						{break;}
+						else
+						{
+							perror("accept");
+							break;
+						}
 					}
-				}
-				fcntl(newfd,F_SETFL,O_NONBLOCK);
-				add_to_fdlist(newfd,&fdlist,&fd_count,&fd_size);
-				struct epoll_event client_ev;
-				client_ev.events = EPOLLIN | EPOLLET;
-				client_ev.data.fd = newfd;
-				inet_ntop(clientaddr.ss_family,get_in_addr((struct sockaddr*)&clientaddr),clientip,sizeof clientip);
-				printf("Successfully connect to %s, socket number: %d\n",clientip,newfd);
-				if(epoll_ctl(epfd,EPOLL_CTL_ADD,newfd,&client_ev)==-1)
-				{
-					perror("client epoll_clt");
-					epoll_ctl(epfd,EPOLL_CTL_DEL,newfd,NULL);
-					close(newfd);
+					fcntl(newfd,F_SETFL,O_NONBLOCK);
+					add_to_fdlist(newfd,&fdlist,&fd_count,&fd_size);
+					ev.events = EPOLLIN | EPOLLET;
+					ev.data.fd = newfd;
+					inet_ntop(clientaddr.ss_family,get_in_addr((struct sockaddr*)&clientaddr),clientip,sizeof clientip);
+					printf("Successfully connect to %s, socket number: %d\n",clientip,newfd);
+					if(epoll_ctl(epfd,EPOLL_CTL_ADD,newfd,&ev)==-1)
+					{
+						perror("client epoll_clt");
+						epoll_ctl(epfd,EPOLL_CTL_DEL,newfd,NULL);
+						close(newfd);
+					}
 				}
 			}
 
@@ -237,12 +239,14 @@ int main()
 					perror("recv");
 					epoll_ctl(epfd,EPOLL_CTL_DEL,sender_fd,NULL);
 					close(sender_fd);
+					break;
 				}
 				else if(header_res == 0)
 				{
 					printf("Connection closed from socket %d\n",sender_fd);
 					epoll_ctl(epfd,EPOLL_CTL_DEL,sender_fd,NULL);
 					close(sender_fd);
+					break;
 				}
 				else
 				{
@@ -255,7 +259,7 @@ int main()
 						fprintf(stderr,"Security alert: invaild packet size on %d\n",sender_fd);
 						epoll_ctl(epfd,EPOLL_CTL_DEL,sender_fd,NULL);
 						close(sender_fd);
-						continue;
+						break;
 					}
 					int body_res = recvall(sender_fd,packet+offset,bodysize);
 					if(body_res <= 0)
@@ -263,7 +267,8 @@ int main()
 						fprintf(stderr,"Connection loss from %d\n",sender_fd);
 						epoll_ctl(epfd,EPOLL_CTL_DEL,sender_fd,NULL);
 						close(sender_fd);
-						continue;
+						break;
+
 					}
 					uint16_t netidlen;
 					memcpy(&netidlen,packet+offset,2);
@@ -273,14 +278,14 @@ int main()
 						fprintf(stderr,"Security alert: invaild id length: %d on fd: %d\n",idlen,sender_fd);
 						epoll_ctl(epfd,EPOLL_CTL_DEL,sender_fd,NULL);
 						close(sender_fd);
-						continue;
+						break;
 					}
 					offset += 2;
 					char id[MAXIDLEN+1];
 					memcpy(id,packet+offset,idlen);
 					id[idlen]='\0';
 					offset += idlen;
-					
+				
 					uint16_t netdatalen;
 					memcpy(&netdatalen,packet+offset,2);
 					int datalen = ntohs(netdatalen);
@@ -289,7 +294,7 @@ int main()
 						fprintf(stderr,"Security alert: invaild data size: %d on fd %d\n:",datalen,sender_fd);
 						epoll_ctl(epfd,EPOLL_CTL_DEL,sender_fd,NULL);
 						close(sender_fd);
-						continue;
+						break;
 					}
 					offset += 2;
 					char data[MAXDATALEN+1];

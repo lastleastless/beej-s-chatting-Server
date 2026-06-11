@@ -11,7 +11,7 @@
 #include <fcntl.h>
 
 #define MAXDATALEN 50
-#define PORT "4440"
+#define PORT "3490"
 #define MAXIDLEN 10
 
 int sendall(int s,char* data,int* len)
@@ -127,6 +127,7 @@ int main(int argc,char **argv)
 	uint16_t netidlen = htons(idlen);
 	while(1)
 	{
+		/*
 		uint16_t net_total;
 		int header_res = recvall(sockfd,(char*)&net_total,2);
 		if(header_res == -1)
@@ -198,7 +199,7 @@ int main(int argc,char **argv)
 			data[datalen] = '\0';
 			printf("%s\n",data);
 			memset(recvpacket,0,sizeof recvpacket);
-		}		
+		}*/		
 		char data[MAXDATALEN+1];
 		if(fgets(data,MAXDATALEN,stdin)==NULL)
 			break;
