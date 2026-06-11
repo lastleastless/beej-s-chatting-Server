@@ -13,30 +13,30 @@
 
 #define MAXEVENTS 20
 #define MAXIDLEN 10
-#define MAXDATALEN 10
+#define MAXDATALEN 50
 #define MAXCLIENTNUM 20000
 #define PORT "4440"
 #define BACKLOG 10
 
-int add_to_fdlist(int fd,int fdlist[],int *fd_count,int *fd_size)
+int add_to_fdlist(int fd,int** fdlist,int *fd_count,int *fd_size)
 {
 	if(*fd_count == *fd_size)
 	{
 		*fd_size *= 2;
 		if((*fd_size) > MAXCLIENTNUM)
 			return 1;
-		int *temp = realloc(fdlist,sizeof (int) * (*fd_size));
+		int *temp = realloc(*fdlist,sizeof (int) * (*fd_size));
 		if(temp == NULL)
 			return -1;
-		fdlist = temp;
+		*fdlist = temp;
 		fprintf(stdout,"Successfully expand userlist to %d\n",*fd_size);
 	}
-	fdlist[*fd_count] = fd;
+	(*fdlist)[*fd_count] = fd;
 	(*fd_count)++;
 	return 0;
 }
 
-void delete_from_fdlist(int fdlist[],int idx,int *fd_count)
+void delete_from_fdlist(int *fdlist,int idx,int *fd_count)
 {
 	fdlist[idx] = fdlist[(*fd_count)-1];
 	(*fd_count)--;
@@ -115,7 +115,7 @@ int main()
 {
 	int fd_size = 5;
 	int fd_count = 0;
-	int fdlist[fd_size];
+	int *fdlist = malloc(sizeof (int) * fd_size);
 
 	int listener_fd;
 	int rv;
@@ -164,7 +164,7 @@ int main()
 	}
 	fcntl(listener_fd,F_SETFL,O_NONBLOCK);
 	printf("Successfully establish listener socket.\n");
-	if(add_to_fdlist(listener_fd,fdlist,&fd_count,&fd_size)!=0)
+	if(add_to_fdlist(listener_fd,&fdlist,&fd_count,&fd_size)!=0)
 	{
 		fprintf(stderr,"fail to get fdlist.\n");
 		exit(1);
@@ -205,9 +205,9 @@ int main()
 					int newfd = accept(listener_fd,(struct sockaddr*)&clientaddr,&clientaddrlen);
 					if(newfd == -1)
 					{
-						if(errno == EAGAIN || EWOULDBLOCK)
+						if(errno == EAGAIN ||errno == EWOULDBLOCK)
 						{
-							continue;
+							break;
 						}
 						else
 						{
@@ -216,19 +216,17 @@ int main()
 						}
 					}
 					fcntl(newfd,F_SETFL,O_NONBLOCK);
-					add_to_fdlist(newfd,fdlist,&fd_count,&fd_size);
+					add_to_fdlist(newfd,&fdlist,&fd_count,&fd_size);
 					struct epoll_event client_ev;
 					client_ev.events = EPOLLIN | EPOLLET;
 					client_ev.data.fd = newfd;
 					inet_ntop(clientaddr.ss_family,get_in_addr((struct sockaddr*)&clientaddr),clientip,sizeof clientip);
 					printf("Successfully connect to %s, socket number: %d\n",clientip,newfd);
-					if(epoll_ctl(epfd,EPOLL_CTL_ADD,newfd,&ev)==-1)
+					if(epoll_ctl(epfd,EPOLL_CTL_ADD,newfd,&client_ev)==-1)
 					{
 						perror("client epoll_clt");
 						close(newfd);
 					}
-					if(errno == EAGAIN)
-						break;
 				}
 			}
 			else
@@ -245,6 +243,7 @@ int main()
 				else if(header_res == 0)
 				{
 					printf("Connection closed from socket %d\n",sender_fd);
+					epoll_ctl(epfd,EPOLL_CTL_DEL,sender_fd,NULL);
 					close(sender_fd);
 				}
 				else
@@ -255,12 +254,14 @@ int main()
 					if(totalsize < 4)
 					{
 						fprintf(stderr,"Security alert: invaild packet size on %d\n",sender_fd);
+						epoll_ctl(epfd,EPOLL_CTL_DEL,sender_fd,NULL);
 						close(sender_fd);
 					}
 					int body_res = recvall(sender_fd,packet+offset,bodysize);
 					if(body_res <= 0)
 					{
 						fprintf(stderr,"Connection loss from %d\n",sender_fd);
+						epoll_ctl(epfd,EPOLL_CTL_DEL,sender_fd,NULL);
 						close(sender_fd);
 					}
 					uint16_t netidlen;
@@ -269,6 +270,7 @@ int main()
 					if(idlen > MAXIDLEN || offset + idlen > totalsize)
 					{
 						fprintf(stderr,"Security alert: invaild id length: %d on fd: %d\n",idlen,sender_fd);
+						epoll_ctl(efds,EPOLL_CTL_DEL,sender_fd,NULL);
 						close(sender_fd);
 					}
 					offset += 2;
@@ -282,14 +284,16 @@ int main()
 					int datalen = ntohs(netdatalen);
 					if(datalen > MAXDATALEN || datalen + offset > totalsize)
 					{
-						fprintf(stderr,"Security alert: invaild data size: %d on fd %d\n:",datalen,sender_fd);
+						fprintf(stderr,"Security alert: invaild data size: %d on fd %d\n",datalen,sender_fd);
+						epoll_ctl(efds,EPOLL_CTL_DEL,sender_fd,NULL);
 						close(sender_fd);
 					}
 					char data[MAXDATALEN+1];
 					memcpy(data,packet+offset,datalen);
 					offset += datalen;
+					data[datalen] = '\0';
 					printf("%s : %s\n",id,data);
-					memcpy(packet,&totalsize,2);
+					memcpy(packet,&nettotal,2);
 					for(int j = 1; j < fd_count ; j++)
 					{
 						if(fdlist[j]!= sender_fd)
@@ -298,14 +302,17 @@ int main()
 							if(sendbytes == 0)
 							{
 								printf("Connection closed from %d while broadcasting.\n",fdlist[j]);
+								epoll_ctl(epfd,EPOLL_CTL_DEL,fdlist[j],NULL);
 								close(fdlist[j]);
 								delete_from_fdlist(fdlist,j,&fd_count);
 							}
 							else if(sendbytes == -1)
 							{
 								perror("send:broadcasting:");
+								epoll_ctl(epfd,EPOLL_CTL_DEL,fdlist[j],NULL)l
 								close(fdlist[j]);
 								delete_from_fdlist(fdlist,j,&fd_count);
+								j--;
 							}
 						}
 					}
