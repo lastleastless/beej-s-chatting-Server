@@ -167,8 +167,10 @@ void* consumer(void* arg)
 		while(*(info->packet_num) == -1)
 			pthread_cond_wait(&fill,&m);
 		printf("Worker %d get work from queue!\n",info->tid);
+		printf("Queue number : %d\n",*(info->packet_num));
 		struct taskstruct* t = &((info->t_queue)[*(info->packet_num)]);
-		*(info->packet_num)--;
+		int *modifypacketnum = info->packet_num;
+		*modifypacketnum -= 1;
 		pthread_mutex_unlock(&m);
 		pthread_cond_signal(&empty);
 		broadcast(t);
