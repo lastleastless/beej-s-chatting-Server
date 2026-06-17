@@ -7,6 +7,7 @@ beej's poll chat server improvement suggestion
 4. serialzation / deserialization
 5. ensure all bytes of packet are received/sended.
 6. migrate poll() to epoll()
+7. add Multi-Threading server model (Producer / Consumer model) 
 
 2 -> fatal error is occured. exit(1) -> send close() to all client and log error, then exit(1) 
 
@@ -30,3 +31,12 @@ beej's poll chat server improvement suggestion
 
 5-> sendall -> done
     recvall -> done
+
+6-> server -> producer -> get packet from client and put packet in buffer
+           -> consumer  -> get packet from buffer and give packet to sender.
+           -> semaphore value: fill = 0, empty = sizeof buffer, m = 1
+           -> or using pthread_mutex_lock, unlock, pthread_cond_wait, pthread_cond_signal ..
+           -> thread creation -> when accept comes to server -> make consumer thread for specific client.
+                              -> create producer thread when server is start.
+           -> under construction...
+
