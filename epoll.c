@@ -10,6 +10,8 @@
 #include <sys/epoll.h>
 #include <fcntl.h>
 #include <string.h>
+#include <pthread.h>
+#include <semaphore.h>
 
 #define MAXEVENTS 20
 #define MAXIDLEN 10
@@ -17,6 +19,12 @@
 #define MAXCLIENTNUM 20000
 #define PORT "4440"
 #define BACKLOG 10
+#define MAXPACKETLEN (2+2+MAXIDLEN+2+MAXDATALEN)
+#define MAXPACKETNUM 100
+
+sem_t fill;
+sem_t empty;
+sem_t m;
 
 int add_to_fdlist(int fd,int** fdlist,int *fd_count,int *fd_size)
 {
@@ -124,6 +132,14 @@ int main()
 	struct epoll_event events[MAXEVENTS];
 	socklen_t clientaddrlen;
 	int yes = 1;
+
+	pthread_t workers[4];
+        char **packetbuffer = malloc(sizeof(char) * MAXPACKETLEN * MAXPACKETNUM);
+	int packetnum = 0;
+	sem_init(&empty,0,MAXPAKETNUM);
+	sem_init(&fill,0,0);
+	sem_init(&m,0,1);
+
 	memset(&hints,0,sizeof hints);
 	hints.ai_socktype = SOCK_STREAM;
 	hints.ai_flags = AI_PASSIVE;
@@ -248,6 +264,8 @@ int main()
 				}
 				else
 				{
+					//packet varification section
+
 					int totalsize = ntohs(nettotal);
 					int bodysize = totalsize - 2;
 					int offset = 2;
@@ -294,6 +312,21 @@ int main()
 					data[datalen] = '\0';
 					printf("%s : %s\n",id,data);
 					memcpy(packet,&nettotal,2);
+
+					//Producer section
+
+					sem_wait(&empty);
+					sem_wait(&m);
+					//begin critical section
+
+					memcpy(packetbuffer[packetnum],packet,totalsize);
+					packetnum++;
+
+					//end critical section
+					sem_post(&m);
+					sem_post(&fill);
+					
+					/* thread will do this for the server
 					for(int j = 1; j < fd_count ; j++)
 					{
 						if(fdlist[j]!= sender_fd)
@@ -315,7 +348,7 @@ int main()
 								j--;
 							}
 						}
-					}
+					}*/
 				}
 				
 			}
