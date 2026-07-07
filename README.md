@@ -1,42 +1,27 @@
 
-beej's poll chat server improvement suggestion
+beej's poll chat server improvement
 
-1. modulize all subfunctions.
-2. add graceful exit
-3. add ID feature
-4. serialzation / deserialization
-5. ensure all bytes of packet are received/sended.
-6. migrate poll() to epoll()
-7. add Multi-Threading server model (Producer / Consumer model) 
+Epoll -Edge Trigger를 이용한 pthread worker pool c socket multithreading server
 
-2 -> fatal error is occured. exit(1) -> send close() to all client and log error, then exit(1) 
 
-3 -> add ID feature. Done
+# Tech Stack:
+	Language: C (C11 standard)
+	OS: linux
+	API: POSIX thread(pthread), linux EPOLL(non-blocking I/O)
 
-4 -> pure string message -> serialize size + Id + data packet
 
-  -> make sendall / recvall function to ensure robust data streaming
-  
-  -> struct userinfo
-	char id[11];
-	char buf[101];
+# System architecture:
+	CPU 코어를 최대한 활용하기 위한 Producer - Consumer pattern 채택.
 
-  -> data packet
-	->   size  IDSIZE ID     dataSIZE  data
-	     2byte 2byte  10byte 2byte     100byte
-	-> ID, data -> No null terminator
-	-> receiver must add '\0' to get c-style string
-  -> doesn't have protection to overflow input.
-  -> add overlflow protectino both server side and client size.
+	1.Main thread.
+		epoll_wait loop를 통해 epoll_in event를 Edge Trigger방식으로 감지합니다.
+		client가 보낸 data는 TCP를 이용해 수신하므로 데이터가 쪼개지는것을 대비하여 recvall()을 통하여 안전하게 받습니다.
+		수신이 완료된 패킷은 queue에 push하고 pthread_cond_signal()을 통하여 워커 플에게 데이터가 들어왔음을 알립니다.
+	2.Worker thread pool
+	스레드 풀을 만들어 컨텍스트 스위칭을 최소화하고 메인루프와 독립적으로 client들에게 메세지를 브로드캐스팅합니다.
 
-5-> sendall -> done
-    recvall -> done
-
-6-> server -> producer -> get packet from client and put packet in buffer
-           -> consumer  -> get packet from buffer and give packet to sender.
-           -> semaphore value: fill = 0, empty = sizeof buffer, m = 1
-           -> or using pthread_mutex_lock, unlock, pthread_cond_wait, pthread_cond_signal ..
-           -> thread creation -> when accept comes to server -> make consumer thread for specific client.
-                              -> create producer thread when server is start.
-           -> under construction...
-
+# tech issue:
+	처음 소비자 스레드를 구현할 때 깊은 복사를 이용하지 않고, 얕은 복사를 이용하여 데이터 구조체를 참조하였는데,
+	이때 생산자 스레드가 패킷을 큐에 밀어 넣으면 값이 덮어씌워지는 race condition이 발생하였습니다.
+	이를 해결하기위하여 소비자 스레드에서 데이터 구조체를 참조할 때 깊은 복사를 통해 race condition이 일어나지 않도록
+	코드를 정리하였습니다.
